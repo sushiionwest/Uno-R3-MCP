@@ -261,7 +261,7 @@ MIT License - See [LICENSE](LICENSE) file
 
 - 📖 Read the docs: [LLM_GUIDE.md](LLM_GUIDE.md)
 - 💬 Issues: [GitHub Issues](https://github.com/sushiionwest/Uno-R3-MCP/issues)
-- 📧 Email: your@email.com
+- 📧 Email: williamevictor@email.com
 
 ---
 
