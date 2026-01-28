@@ -1,0 +1,81 @@
+================================================================================
+ARDUINO MCP SERVER - QUICK START GUIDE
+================================================================================
+
+Your Arduino MCP server is installed and tested!
+Your Arduino is detected on: COM3
+
+NEXT STEPS:
+-----------
+
+1. CONFIGURE CLAUDE CODE
+   
+   Edit this file:
+   %APPDATA%\Claude Code\claude_desktop_config.json
+   
+   Add this content:
+   {
+     "mcpServers": {
+       "arduino": {
+         "command": "node",
+         "args": ["C:\arduino-mcp-server\index.js"]
+       }
+     }
+   }
+
+2. RESTART CLAUDE CODE
+   
+   Completely close and reopen Claude Code
+
+3. UPLOAD ARDUINO SKETCH
+   
+   Open: examples/thrust_test.ino
+   Upload to your Elegoo Uno R3
+   
+   (Or use your own sketch that sends data via Serial)
+
+4. TEST IT
+   
+   Ask Claude Code:
+   "List all serial ports and connect to my Arduino"
+
+================================================================================
+EXAMPLE PROMPTS TO TRY:
+================================================================================
+
+"Find my Arduino and show me what data it's sending"
+
+"Run my thrust test and analyze the results"
+
+"Monitor my Arduino in real-time and alert me if anything unusual happens"
+
+"Export all Arduino data as CSV"
+
+================================================================================
+DOCUMENTATION:
+================================================================================
+
+README.md           - Overview and features
+INSTALL.md          - Detailed installation guide
+LLM_GUIDE.md        - Complete reference for AI assistants
+PROMPT_TEMPLATES.md - 20+ ready-to-use prompts
+examples/           - Arduino sketch examples
+
+================================================================================
+TROUBLESHOOTING:
+================================================================================
+
+Run diagnostic test:
+  npm test
+
+Check if Arduino is connected:
+  It's currently on COM3 (Vendor ID: 2341)
+
+Get help:
+  See INSTALL.md troubleshooting section
+
+================================================================================
+
+Ready to start? Configure Claude Code and restart it!
+
+================================================================================

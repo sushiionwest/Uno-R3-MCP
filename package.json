@@ -1,0 +1,39 @@
+{
+  "name": "arduino-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server enabling LLMs to communicate with Arduino boards for data collection, thrust testing, and sensor monitoring",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "arduino-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test-server.js"
+  },
+  "keywords": [
+    "mcp",
+    "arduino",
+    "serial",
+    "thrust-test",
+    "data-logging",
+    "sensors",
+    "aerospace",
+    "claude",
+    "llm",
+    "ai"
+  ],
+  "author": "Arduino MCP Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/arduino-mcp-server"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "serialport": "^12.0.0"
+  }
+}
