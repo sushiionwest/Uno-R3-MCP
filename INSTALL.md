@@ -5,7 +5,7 @@
 ### Step 1: Install the Server
 
 ```bash
-git clone https://github.com/yourusername/arduino-mcp-server
+git clone https://github.com/sushiionwest/Uno-R3-MCP
 cd arduino-mcp-server
 npm install
 ```
@@ -106,7 +106,7 @@ winget install OpenJS.NodeJS
 
 # Clone and install server
 cd C:\
-git clone https://github.com/yourusername/arduino-mcp-server
+git clone https://github.com/sushiionwest/Uno-R3-MCP
 cd arduino-mcp-server
 npm install
 
@@ -150,7 +150,7 @@ Save as `setup-arduino-mcp.sh`:
 
 # Install to home directory
 cd ~
-git clone https://github.com/yourusername/arduino-mcp-server
+git clone https://github.com/sushiionwest/Uno-R3-MCP
 cd arduino-mcp-server
 npm install
 

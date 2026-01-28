@@ -23,7 +23,7 @@ Perfect for **aerospace thrust testing**, **data logging**, **sensor monitoring*
 
 ### 1. Install
 ```bash
-git clone https://github.com/yourusername/arduino-mcp-server
+git clone https://github.com/sushiionwest/Uno-R3-MCP
 cd arduino-mcp-server
 npm install
 ```
@@ -260,7 +260,7 @@ MIT License - See [LICENSE](LICENSE) file
 ## Support
 
 - 📖 Read the docs: [LLM_GUIDE.md](LLM_GUIDE.md)
-- 💬 Issues: [GitHub Issues](https://github.com/yourusername/arduino-mcp-server/issues)
+- 💬 Issues: [GitHub Issues](https://github.com/sushiionwest/Uno-R3-MCP/issues)
 - 📧 Email: your@email.com
 
 ---
