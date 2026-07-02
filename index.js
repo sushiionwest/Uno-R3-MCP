@@ -6,15 +6,39 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { SerialPort } from "serialport";
-import { ReadlineParser } from "@serialport/parser-readline";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import {
+  MockArduino,
+  MOCK_PORT_LIST,
+  MOCK_BOARD_LIST_TEXT,
+} from "./mock-serial.js";
 
 const execFileAsync = promisify(execFile);
+
+// Mock mode: MCP_MOCK_SERIAL=1 or --mock runs the entire server with zero
+// hardware -- a fake port listing, fake connections, and a deterministic
+// simulated thrust-test stream (see mock-serial.js). Every mock response is
+// labeled as simulated.
+const MOCK_MODE =
+  process.env.MCP_MOCK_SERIAL === "1" || process.argv.includes("--mock");
+const MOCK_LABEL = "[SIMULATED - mock mode, no hardware]";
+
+// Pacing of simulated data lines in mock mode (milliseconds between lines).
+// Affects timing only, never the data itself.
+const MOCK_EMIT_MS = Number(process.env.MCP_MOCK_EMIT_MS) || 100;
+
+// serialport is a native module; it is only loaded in real mode so mock mode
+// has zero hardware dependencies.
+let SerialPort;
+let ReadlineParser;
+if (!MOCK_MODE) {
+  ({ SerialPort } = await import("serialport"));
+  ({ ReadlineParser } = await import("@serialport/parser-readline"));
+}
 
 // arduino-cli location: taken from ARDUINO_CLI_PATH if set, otherwise
 // arduino-cli is expected to be on the PATH.
@@ -61,15 +85,27 @@ function requireString(args, name) {
   return value;
 }
 
+// Prefix responses with the mock label so simulated output is never mistaken
+// for real hardware data.
+function label(text) {
+  return MOCK_MODE ? `${MOCK_LABEL}\n${text}` : text;
+}
+
 // Close an open connection (used before uploads, which need the port free).
 function closeConnection(port) {
   return new Promise((resolve) => {
-    const serialPort = activeConnections.get(port);
-    if (!serialPort) {
+    const connection = activeConnections.get(port);
+    if (!connection) {
       resolve();
       return;
     }
-    serialPort.close(() => {
+    if (MOCK_MODE) {
+      connection.close();
+      activeConnections.delete(port);
+      resolve();
+      return;
+    }
+    connection.close(() => {
       activeConnections.delete(port);
       resolve();
     });
@@ -269,6 +305,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case "list_serial_ports": {
+        if (MOCK_MODE) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: label(JSON.stringify(MOCK_PORT_LIST, null, 2)),
+              },
+            ],
+          };
+        }
+
         const ports = await SerialPort.list();
         const portInfo = ports.map(port => ({
           path: port.path,
@@ -294,6 +341,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Close existing connection if any
         await closeConnection(port);
+
+        if (MOCK_MODE) {
+          // Set up data buffer for this port
+          if (!dataBuffers.has(port)) {
+            dataBuffers.set(port, []);
+          }
+
+          // Deterministic pseudo-timestamps: fixed epoch plus 100 ms per
+          // line, so mock buffers never depend on the wall clock.
+          let lineIndex = 0;
+          const mockEpochMs = Date.UTC(2026, 0, 1);
+
+          const mock = new MockArduino({
+            emitIntervalMs: MOCK_EMIT_MS,
+            onLine: (line) => {
+              const buffer = dataBuffers.get(port);
+              buffer.push({
+                timestamp: new Date(mockEpochMs + lineIndex * 100).toISOString(),
+                data: line,
+              });
+              lineIndex += 1;
+
+              // Keep buffer size manageable (last 1000 lines)
+              if (buffer.length > 1000) {
+                buffer.shift();
+              }
+            },
+          });
+
+          mock.open();
+          activeConnections.set(port, mock);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: label(`Connected to ${port} at ${baudRate} baud`),
+              },
+            ],
+          };
+        }
 
         // Create new connection
         const serialPort = new SerialPort({
@@ -352,7 +440,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: `No data buffer for ${port}. Connect to the port first.`,
+                text: label(`No data buffer for ${port}. Connect to the port first.`),
               },
             ],
           };
@@ -368,7 +456,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: JSON.stringify(recentData, null, 2),
+              text: label(JSON.stringify(recentData, null, 2)),
             },
           ],
         };
@@ -383,20 +471,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: `Not connected to ${port}. Connect first.`,
+                text: label(`Not connected to ${port}. Connect first.`),
               },
             ],
           };
         }
 
-        const serialPort = activeConnections.get(port);
-        serialPort.write(data + '\n');
+        const connection = activeConnections.get(port);
+        if (MOCK_MODE) {
+          connection.write(data);
+        } else {
+          connection.write(data + '\n');
+        }
 
         return {
           content: [
             {
               type: "text",
-              text: `Sent to ${port}: ${data}`,
+              text: label(`Sent to ${port}: ${data}`),
             },
           ],
         };
@@ -410,7 +502,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: `No active connection to ${port}`,
+                text: label(`No active connection to ${port}`),
               },
             ],
           };
@@ -422,13 +514,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: `Disconnected from ${port}`,
+              text: label(`Disconnected from ${port}`),
             },
           ],
         };
       }
 
       case "detect_boards": {
+        if (MOCK_MODE) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: label(MOCK_BOARD_LIST_TEXT),
+              },
+            ],
+          };
+        }
+
         const { stdout } = await runArduinoCli(["board", "list"]);
 
         return {
@@ -444,6 +547,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "compile_sketch": {
         const sketchPath = requireString(args, "sketchPath");
         const { fqbn = "arduino:avr:uno" } = args;
+
+        if (MOCK_MODE) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: label(
+                  `Compilation skipped. Would run: ${ARDUINO_CLI} compile --fqbn ${fqbn} "${sketchPath}"`
+                ),
+              },
+            ],
+          };
+        }
 
         const { stdout } = await runArduinoCli(["compile", "--fqbn", fqbn, sketchPath]);
 
@@ -465,6 +581,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Free the port before uploading
         await closeConnection(port);
 
+        if (MOCK_MODE) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: label(
+                  `Upload skipped. Would run: ${ARDUINO_CLI} upload -p ${port} --fqbn ${fqbn} "${sketchPath}"`
+                ),
+              },
+            ],
+          };
+        }
+
         const { stdout } = await runArduinoCli(["upload", "-p", port, "--fqbn", fqbn, sketchPath]);
 
         return {
@@ -484,6 +613,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Free the port before uploading
         await closeConnection(port);
+
+        if (MOCK_MODE) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: label(
+                  `Compile and upload skipped. Would run: ${ARDUINO_CLI} compile --fqbn ${fqbn} "${sketchPath}" then ${ARDUINO_CLI} upload -p ${port} --fqbn ${fqbn} "${sketchPath}"`
+                ),
+              },
+            ],
+          };
+        }
 
         const compileResult = await runArduinoCli(["compile", "--fqbn", fqbn, sketchPath]);
         const uploadResult = await runArduinoCli(["upload", "-p", port, "--fqbn", fqbn, sketchPath]);
@@ -523,11 +665,17 @@ void loop() {
 
         await fs.writeFile(sketchFile, sketchCode || defaultCode, "utf8");
 
+        // create_sketch is filesystem-only, so it does real work even in
+        // mock mode -- note that in the response rather than mislabeling it.
+        const note = MOCK_MODE
+          ? " (mock mode note: create_sketch performs real filesystem writes even in mock mode)"
+          : "";
+
         return {
           content: [
             {
               type: "text",
-              text: `Sketch created at ${sketchFile}`,
+              text: `Sketch created at ${sketchFile}${note}`,
             },
           ],
         };
@@ -553,7 +701,11 @@ void loop() {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Uno-R3-MCP server running on stdio");
+  console.error(
+    MOCK_MODE
+      ? "Uno-R3-MCP server running on stdio (MOCK MODE - simulated hardware)"
+      : "Uno-R3-MCP server running on stdio"
+  );
 }
 
 main().catch((error) => {
