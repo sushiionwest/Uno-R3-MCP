@@ -1,12 +1,19 @@
 {
-  "name": "arduino-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP server enabling LLMs to communicate with Arduino boards for data collection, thrust testing, and sensor monitoring",
+  "name": "uno-r3-mcp",
+  "version": "1.1.0",
+  "description": "MCP server for Arduino Uno R3 serial communication, thrust-test data collection, and arduino-cli compile/upload, with a deterministic zero-hardware mock mode",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "arduino-mcp": "./index.js"
+    "uno-r3-mcp": "./index.js"
   },
+  "files": [
+    "index.js",
+    "mock-serial.js",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node index.js",
     "test": "node --test",
@@ -14,22 +21,29 @@
   },
   "keywords": [
     "mcp",
+    "modelcontextprotocol",
     "arduino",
+    "uno-r3",
     "serial",
+    "serialport",
+    "arduino-cli",
     "thrust-test",
+    "hx711",
     "data-logging",
     "sensors",
-    "aerospace",
     "claude",
-    "llm",
-    "ai"
+    "llm"
   ],
-  "author": "Arduino MCP Contributors",
+  "author": "William Victor <williamevictor@gmail.com> (https://github.com/sushiionwest)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sushiionwest/Uno-R3-MCP"
+    "url": "git+https://github.com/sushiionwest/Uno-R3-MCP.git"
   },
+  "bugs": {
+    "url": "https://github.com/sushiionwest/Uno-R3-MCP/issues"
+  },
+  "homepage": "https://github.com/sushiionwest/Uno-R3-MCP#readme",
   "engines": {
     "node": ">=18.0.0"
   },
