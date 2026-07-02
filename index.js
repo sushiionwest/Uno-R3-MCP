@@ -8,6 +8,17 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { SerialPort } from "serialport";
 import { ReadlineParser } from "@serialport/parser-readline";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import fs from "fs/promises";
+import path from "path";
+import os from "os";
+
+const execFileAsync = promisify(execFile);
+
+// arduino-cli location: taken from ARDUINO_CLI_PATH if set, otherwise
+// arduino-cli is expected to be on the PATH.
+const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || "arduino-cli";
 
 // Store active connections
 const activeConnections = new Map();
@@ -16,8 +27,8 @@ const dataBuffers = new Map();
 // Create server instance
 const server = new Server(
   {
-    name: "arduino-thrust-test",
-    version: "1.0.0",
+    name: "uno-r3-mcp",
+    version: "1.1.0",
   },
   {
     capabilities: {
@@ -25,6 +36,45 @@ const server = new Server(
     },
   }
 );
+
+// Run arduino-cli with the given arguments, failing with a clear message
+// when the binary cannot be found.
+async function runArduinoCli(cliArgs) {
+  try {
+    return await execFileAsync(ARDUINO_CLI, cliArgs, { windowsHide: true });
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(
+        `arduino-cli not found at "${ARDUINO_CLI}". Install arduino-cli and either add it to your PATH or set the ARDUINO_CLI_PATH environment variable to its full path.`
+      );
+    }
+    throw new Error(error.stderr || error.message);
+  }
+}
+
+// Validate that a required string argument is present and non-empty.
+function requireString(args, name) {
+  const value = args?.[name];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`Missing required string argument: ${name}`);
+  }
+  return value;
+}
+
+// Close an open connection (used before uploads, which need the port free).
+function closeConnection(port) {
+  return new Promise((resolve) => {
+    const serialPort = activeConnections.get(port);
+    if (!serialPort) {
+      resolve();
+      return;
+    }
+    serialPort.close(() => {
+      activeConnections.delete(port);
+      resolve();
+    });
+  });
+}
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -72,6 +122,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "Number of recent lines to return (default: 50)",
               default: 50,
             },
+            clear: {
+              type: "boolean",
+              description: "Clear the data buffer after reading (default: false)",
+              default: false,
+            },
           },
           required: ["port"],
         },
@@ -108,6 +163,101 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["port"],
         },
       },
+      {
+        name: "detect_boards",
+        description: "Detect connected Arduino boards and their FQBNs using arduino-cli",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "compile_sketch",
+        description: "Compile an Arduino sketch with arduino-cli",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sketchPath: {
+              type: "string",
+              description: "Path to the sketch folder or .ino file",
+            },
+            fqbn: {
+              type: "string",
+              description: "Fully Qualified Board Name (default: arduino:avr:uno)",
+              default: "arduino:avr:uno",
+            },
+          },
+          required: ["sketchPath"],
+        },
+      },
+      {
+        name: "upload_sketch",
+        description: "Upload a compiled sketch to an Arduino board with arduino-cli. Closes any open serial connection on the port first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sketchPath: {
+              type: "string",
+              description: "Path to the sketch folder or .ino file",
+            },
+            port: {
+              type: "string",
+              description: "Serial port the board is on (e.g., COM3)",
+            },
+            fqbn: {
+              type: "string",
+              description: "Fully Qualified Board Name (default: arduino:avr:uno)",
+              default: "arduino:avr:uno",
+            },
+          },
+          required: ["sketchPath", "port"],
+        },
+      },
+      {
+        name: "compile_and_upload",
+        description: "Compile and upload a sketch to an Arduino board in one step with arduino-cli. Closes any open serial connection on the port first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sketchPath: {
+              type: "string",
+              description: "Path to the sketch folder or .ino file",
+            },
+            port: {
+              type: "string",
+              description: "Serial port the board is on (e.g., COM3)",
+            },
+            fqbn: {
+              type: "string",
+              description: "Fully Qualified Board Name (default: arduino:avr:uno)",
+              default: "arduino:avr:uno",
+            },
+          },
+          required: ["sketchPath", "port"],
+        },
+      },
+      {
+        name: "create_sketch",
+        description: "Create a new Arduino sketch folder with an .ino file (template code if none provided)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sketchName: {
+              type: "string",
+              description: "Name of the sketch (creates a folder with this name containing <name>.ino)",
+            },
+            sketchCode: {
+              type: "string",
+              description: "Arduino code for the sketch. If not provided, a basic template is used.",
+            },
+            basePath: {
+              type: "string",
+              description: "Directory to create the sketch folder in (default: <home>/arduino-sketches)",
+            },
+          },
+          required: ["sketchName"],
+        },
+      },
     ],
   };
 });
@@ -139,13 +289,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "connect_arduino": {
-        const { port, baudRate = 9600 } = args;
+        const port = requireString(args, "port");
+        const { baudRate = 9600 } = args;
 
         // Close existing connection if any
-        if (activeConnections.has(port)) {
-          const existingPort = activeConnections.get(port);
-          existingPort.close();
-        }
+        await closeConnection(port);
 
         // Create new connection
         const serialPort = new SerialPort({
@@ -174,11 +322,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         });
 
-        serialPort.on('error', (err) => {
-          console.error(`Error on ${port}:`, err.message);
-        });
-
         activeConnections.set(port, serialPort);
+
+        // Wait for the port to actually open (or fail) before reporting success
+        await new Promise((resolve, reject) => {
+          serialPort.on('open', resolve);
+          serialPort.on('error', (err) => {
+            activeConnections.delete(port);
+            reject(err);
+          });
+        });
 
         return {
           content: [
@@ -191,7 +344,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "read_serial_data": {
-        const { port, lines = 50 } = args;
+        const port = requireString(args, "port");
+        const { lines = 50, clear = false } = args;
 
         if (!dataBuffers.has(port)) {
           return {
@@ -206,6 +360,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const buffer = dataBuffers.get(port);
         const recentData = buffer.slice(-lines);
+        if (clear) {
+          buffer.length = 0;
+        }
 
         return {
           content: [
@@ -218,7 +375,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "send_serial_data": {
-        const { port, data } = args;
+        const port = requireString(args, "port");
+        const data = requireString(args, "data");
 
         if (!activeConnections.has(port)) {
           return {
@@ -245,7 +403,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "disconnect_arduino": {
-        const { port } = args;
+        const port = requireString(args, "port");
 
         if (!activeConnections.has(port)) {
           return {
@@ -258,15 +416,118 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        const serialPort = activeConnections.get(port);
-        serialPort.close();
-        activeConnections.delete(port);
+        await closeConnection(port);
 
         return {
           content: [
             {
               type: "text",
               text: `Disconnected from ${port}`,
+            },
+          ],
+        };
+      }
+
+      case "detect_boards": {
+        const { stdout } = await runArduinoCli(["board", "list"]);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: stdout,
+            },
+          ],
+        };
+      }
+
+      case "compile_sketch": {
+        const sketchPath = requireString(args, "sketchPath");
+        const { fqbn = "arduino:avr:uno" } = args;
+
+        const { stdout } = await runArduinoCli(["compile", "--fqbn", fqbn, sketchPath]);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Compilation successful.\n\n${stdout}`,
+            },
+          ],
+        };
+      }
+
+      case "upload_sketch": {
+        const sketchPath = requireString(args, "sketchPath");
+        const port = requireString(args, "port");
+        const { fqbn = "arduino:avr:uno" } = args;
+
+        // Free the port before uploading
+        await closeConnection(port);
+
+        const { stdout } = await runArduinoCli(["upload", "-p", port, "--fqbn", fqbn, sketchPath]);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Upload successful.\n\n${stdout}`,
+            },
+          ],
+        };
+      }
+
+      case "compile_and_upload": {
+        const sketchPath = requireString(args, "sketchPath");
+        const port = requireString(args, "port");
+        const { fqbn = "arduino:avr:uno" } = args;
+
+        // Free the port before uploading
+        await closeConnection(port);
+
+        const compileResult = await runArduinoCli(["compile", "--fqbn", fqbn, sketchPath]);
+        const uploadResult = await runArduinoCli(["upload", "-p", port, "--fqbn", fqbn, sketchPath]);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Compile and upload successful.\n\nCompile output:\n${compileResult.stdout}\n\nUpload output:\n${uploadResult.stdout}`,
+            },
+          ],
+        };
+      }
+
+      case "create_sketch": {
+        const sketchName = requireString(args, "sketchName");
+        const { sketchCode, basePath = path.join(os.homedir(), "arduino-sketches") } = args;
+
+        if (/[\\/]/.test(sketchName)) {
+          throw new Error("sketchName must be a plain name, not a path");
+        }
+
+        const sketchFolder = path.join(basePath, sketchName);
+        const sketchFile = path.join(sketchFolder, `${sketchName}.ino`);
+
+        await fs.mkdir(sketchFolder, { recursive: true });
+
+        const defaultCode = `void setup() {
+  Serial.begin(9600);
+  Serial.println("${sketchName} Ready!");
+}
+
+void loop() {
+  // Your code here
+}
+`;
+
+        await fs.writeFile(sketchFile, sketchCode || defaultCode, "utf8");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Sketch created at ${sketchFile}`,
             },
           ],
         };
@@ -292,7 +553,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Arduino Thrust Test MCP server running on stdio");
+  console.error("Uno-R3-MCP server running on stdio");
 }
 
 main().catch((error) => {
